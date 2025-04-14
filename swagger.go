@@ -18,12 +18,14 @@ const (
 	defaultIndex  = "index.html"
 )
 
+// HandlerDefault is the default Swagger handler using default config
 var HandlerDefault = New()
 
-// New returns custom Echo middleware handler
+// New returns custom Echo handler
 func New(config ...Config) echo.HandlerFunc {
 	cfg := configDefault(config...)
 
+	// Parse the Swagger UI index template
 	index, err := template.New("swagger_index.html").Parse(indexTmpl)
 	if err != nil {
 		panic(fmt.Errorf("echo: swagger middleware error -> %w", err))
@@ -36,6 +38,7 @@ func New(config ...Config) echo.HandlerFunc {
 	)
 
 	return func(c echo.Context) error {
+		// Initialize prefix and URL only once
 		once.Do(func() {
 			prefix = strings.TrimSuffix(c.Path(), "*")
 
@@ -49,32 +52,37 @@ func New(config ...Config) echo.HandlerFunc {
 			}
 		})
 
+		// Extract request path
 		p := c.Param("*")
 		if p == "" {
 			p = c.Request().URL.Path
+			p = strings.TrimPrefix(p, prefix)
 		}
 
 		switch p {
+		case "", "/":
+			// Redirect to index
+			return c.Redirect(http.StatusMovedPermanently, path.Join(prefix, defaultIndex))
 		case defaultIndex:
+			// Serve Swagger UI
 			c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
 			return index.Execute(c.Response().Writer, cfg)
 		case defaultDocURL:
+			// Serve generated swagger docs
 			doc, err := swag.ReadDoc(cfg.InstanceName)
 			if err != nil {
 				return err
 			}
 			return c.JSONBlob(http.StatusOK, []byte(doc))
-		case "", "/":
-			return c.Redirect(http.StatusMovedPermanently, path.Join(prefix, defaultIndex))
 		default:
-			// Serve static files from embedded swagger FS
+			// Serve static files
 			fsHandler := echo.WrapHandler(fs)
 			return fsHandler(c)
 		}
 	}
 }
 
-// getForwardedPrefix extracts X-Forwarded-Prefix header
+// getForwardedPrefix extracts X-Forwarded-Prefix header if available
 func getForwardedPrefix(c echo.Context) string {
 	headers := c.Request().Header["X-Forwarded-Prefix"]
 	if len(headers) == 0 {
