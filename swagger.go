@@ -18,14 +18,12 @@ const (
 	defaultIndex  = "index.html"
 )
 
-// HandlerDefault is the default Swagger handler using default config
 var HandlerDefault = New()
 
-// New returns custom Echo handler
+// New returns custom Echo middleware handler
 func New(config ...Config) echo.HandlerFunc {
 	cfg := configDefault(config...)
 
-	// Parse the Swagger UI index template
 	index, err := template.New("swagger_index.html").Parse(indexTmpl)
 	if err != nil {
 		panic(fmt.Errorf("echo: swagger middleware error -> %w", err))
@@ -38,8 +36,8 @@ func New(config ...Config) echo.HandlerFunc {
 	)
 
 	return func(c echo.Context) error {
-		// Initialize prefix and URL only once
 		once.Do(func() {
+			// This is the registered route path pattern, e.g., /swagger/*
 			prefix = strings.TrimSuffix(c.Path(), "*")
 
 			forwardedPrefix := getForwardedPrefix(c)
@@ -52,37 +50,34 @@ func New(config ...Config) echo.HandlerFunc {
 			}
 		})
 
-		// Extract request path
-		p := c.Param("*")
-		if p == "" {
-			p = c.Request().URL.Path
-			p = strings.TrimPrefix(p, prefix)
-		}
+		// Extract the actual path being requested
+		requestPath := strings.TrimPrefix(c.Request().URL.Path, prefix)
 
-		switch p {
-		case "", "/":
-			// Redirect to index
-			return c.Redirect(http.StatusMovedPermanently, path.Join(prefix, defaultIndex))
+		switch requestPath {
 		case defaultIndex:
-			// Serve Swagger UI
 			c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
 			return index.Execute(c.Response().Writer, cfg)
+
 		case defaultDocURL:
-			// Serve generated swagger docs
 			doc, err := swag.ReadDoc(cfg.InstanceName)
 			if err != nil {
 				return err
 			}
 			return c.JSONBlob(http.StatusOK, []byte(doc))
+
+		case "", "/":
+			return c.Redirect(http.StatusMovedPermanently, path.Join(prefix, defaultIndex))
+
 		default:
-			// Serve static files
-			fsHandler := echo.WrapHandler(fs)
-			return fsHandler(c)
+			// Reset URL path so http.FileServer can find the correct file
+			c.Request().URL.Path = requestPath
+			fs.ServeHTTP(c.Response().Writer, c.Request())
+			return nil
 		}
 	}
 }
 
-// getForwardedPrefix extracts X-Forwarded-Prefix header if available
+// getForwardedPrefix extracts X-Forwarded-Prefix header
 func getForwardedPrefix(c echo.Context) string {
 	headers := c.Request().Header["X-Forwarded-Prefix"]
 	if len(headers) == 0 {
